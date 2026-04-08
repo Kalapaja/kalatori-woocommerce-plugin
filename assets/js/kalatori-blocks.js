@@ -24,7 +24,7 @@
     const icon = settings?.icon
         ? createElement('img', {
             src: settings.icon,
-            alt: __('Kalatori', 'kalatori-payment-gateway'),
+            alt: __('Crypto (Kalatori)', 'kalatori-payment-gateway'),
             width: 24,
             height: 24,
         })
