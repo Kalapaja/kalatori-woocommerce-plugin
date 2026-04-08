@@ -274,7 +274,7 @@ function kalatori_init_gateway(): void
         {
             $order = wc_get_order($order_id);
 
-            wc_get_logger()->debug(
+            wc_get_logger()->info(
                 sprintf('process_payment called: order_id=%d, amount=%s', $order_id, $order->get_total()),
                 ['source' => 'kalatori']
             );
@@ -375,7 +375,7 @@ function kalatori_init_gateway(): void
             $order->update_status('pending', __('Awaiting Kalatori crypto payment.', 'kalatori-payment-gateway'));
             $order->save();
 
-            wc_get_logger()->debug(
+            wc_get_logger()->info(
                 sprintf('Invoice created: id=%s, redirect=%s', $invoice_id, $payment_url),
                 ['source' => 'kalatori']
             );
@@ -522,12 +522,11 @@ function kalatori_poll_invoice_status_handler(int $order_id): void
                 $newWcStatus,
                 sprintf(__('Kalatori poll: invoice %1$s — status: %2$s.', 'kalatori-payment-gateway'), $invoice_id, $kalatoriStatus->value)
             );
+            wc_get_logger()->info(
+                sprintf('Poller updated order %d: Kalatori=%s, WC=%s.', $order_id, $kalatoriStatus->value, $order->get_status()),
+                ['source' => 'kalatori']
+            );
         }
-
-        wc_get_logger()->debug(
-            sprintf('Poller updated order %d: Kalatori=%s, WC=%s.', $order_id, $kalatoriStatus->value, $order->get_status()),
-            ['source' => 'kalatori']
-        );
     } else {
         wc_get_logger()->warning(
             sprintf('Poller received unknown Kalatori status "%s" for order %d.', $response['result']['status'] ?? '', $order_id),
