@@ -505,7 +505,7 @@ function kalatori_poll_invoice_status_handler(int $order_id): void
 
     if (is_wp_error($response)) {
         wc_get_logger()->warning(
-            sprintf('Invoice poll failed for order %d: %s', $order_id, $response->get_error_message()),
+            sprintf('Poller: invoice poll failed for order %d: %s', $order_id, $response->get_error_message()),
             ['source' => 'kalatori']
         );
         as_schedule_single_action(time() + 3600, 'kalatori_poll_invoice_status', ['order_id' => $order_id], 'kalatori');
