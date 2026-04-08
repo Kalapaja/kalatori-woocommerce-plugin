@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: Kalatori Payment Gateway
- * Description: Accept crypto payments on Polygon via a self-hosted Kalatori daemon.
+ * Description: Accept crypto payments via a self-hosted Kalatori daemon.
  * Version: 0.0.1
  * Requires at least: 6.0
  * Requires PHP: 8.0
@@ -46,24 +46,14 @@ enum KalatoriStatus: string
         };
     }
 
-    /** Invoice is still open and awaiting payment. */
-    public function isActive(): bool
-    {
-        return match ($this) {
-            self::Waiting, self::PartiallyPaid => true,
-            default => false,
-        };
-    }
-
     /** Map to the corresponding WooCommerce order status slug. */
     public function toWcStatus(): string
     {
         return match ($this) {
             self::Waiting => 'pending',
             self::Paid, self::OverPaid => 'processing',
-            self::PartiallyPaid, self::PartiallyPaidExpired => 'on-hold',
-            self::UnpaidExpired => 'failed',
-            self::CustomerCanceled, self::AdminCanceled => 'cancelled',
+            self::PartiallyPaid => 'on-hold',
+            self::UnpaidExpired, self::PartiallyPaidExpired, self::CustomerCanceled, self::AdminCanceled => 'cancelled',
         };
     }
 }
@@ -88,6 +78,32 @@ enum WcOrderStatus: string
             self::Processing, self::Completed,
             self::Cancelled, self::Failed, self::Refunded => true,
             default => false,
+        };
+    }
+}
+
+/**
+ * Kalatori invoice event types as sent in the webhook `event_type` field.
+ */
+enum KalatoriEventType: string
+{
+    case Created          = 'created';
+    case Updated          = 'updated';
+    case Paid             = 'paid';
+    case PartiallyPaid    = 'partially_paid';
+    case Expired          = 'expired';
+    case AdminCanceled    = 'admin_canceled';
+    case CustomerCanceled = 'customer_canceled';
+
+    /** Map to WC order status slug, or null when no status transition is needed. */
+    public function toWcStatus(): ?string
+    {
+        return match ($this) {
+            self::Paid             => 'processing',
+            self::PartiallyPaid    => 'on-hold',
+            self::Expired, self::AdminCanceled, self::CustomerCanceled => 'cancelled',
+            self::Created,
+            self::Updated          => null,
         };
     }
 }
@@ -158,7 +174,6 @@ function kalatori_init_gateway(): void
         }
     }
 
-    add_action('kalatori_poll_invoice_status', 'kalatori_poll_invoice_status_handler');
     add_action('woocommerce_order_status_cancelled', 'kalatori_cancel_invoice_on_wc_cancel');
 
     add_action('rest_api_init', static function (): void {
@@ -174,8 +189,8 @@ function kalatori_init_gateway(): void
      *
      * Redirect-based gateway that creates a Kalatori invoice for each order and
      * sends the customer to the daemon-hosted payment page. Payment status updates
-     * are delivered via HMAC-signed webhooks and a background Action Scheduler
-     * poller as fallback.
+     * are delivered via HMAC-signed webhooks; as a fallback, status is synced
+     * on-demand when the customer or admin views the order page.
      *
      * Order meta keys used by this gateway:
      *  - `_kalatori_invoice_id`   UUID of the Kalatori invoice (set on first payment attempt).
@@ -264,8 +279,8 @@ function kalatori_init_gateway(): void
          * Each call creates a new invoice with an incremented attempt suffix
          * (e.g. "123" → "123-2") to guarantee a unique daemon order ID on retries.
          *
-         * On success, schedules a background poll 2 minutes later as a webhook
-         * fallback, empties the cart, and redirects to the Kalatori payment page.
+         * On success, empties the cart and redirects the customer to the Kalatori payment page.
+         * Status is synced on-demand when the order page is viewed (webhook fallback).
          *
          * @param int $order_id WooCommerce order ID.
          * @return array{result: string, redirect?: string} WC payment result array.
@@ -380,14 +395,6 @@ function kalatori_init_gateway(): void
                 ['source' => 'kalatori']
             );
 
-            // Schedule a fallback status poll in case the webhook is not delivered.
-            as_schedule_single_action(
-                time() + 120,
-                'kalatori_poll_invoice_status',
-                ['order_id' => $order_id],
-                'kalatori'
-            );
-
             WC()->cart->empty_cart();
 
             return [
@@ -416,7 +423,14 @@ function kalatori_init_gateway(): void
 
             $timestamp = (string)time();
             $json_body = $body !== null ? wp_json_encode($body) : '';
-            $message = strtoupper($method) . "\n" . $path . "\n" . $json_body . "\n" . $timestamp;
+            if (strtoupper($method) === 'GET' && !empty($query)) {
+                $sorted_query = $query;
+                ksort($sorted_query);
+                $signed_payload = http_build_query($sorted_query);
+            } else {
+                $signed_payload = $json_body;
+            }
+            $message = strtoupper($method) . "\n" . $path . "\n" . $signed_payload . "\n" . $timestamp;
             $signature = hash_hmac('sha256', $message, $secret_key);
 
             $headers = [
@@ -461,86 +475,6 @@ function kalatori_init_gateway(): void
 }
 
 /**
- * Poll Kalatori for the current invoice status and update the WC order accordingly (Kalatori→WC sync).
- * Acts as a fallback for missed webhooks.
- *
- * Scheduled 2 minutes after invoice creation, then every hour while the invoice is active.
- * Stops when the WC order reaches a final state or after 2 days.
- *
- * @param int $order_id WooCommerce order ID.
- */
-function kalatori_poll_invoice_status_handler(int $order_id): void
-{
-    $order = wc_get_order($order_id);
-    $invoice_id = $order ? $order->get_meta('_kalatori_invoice_id') : '';
-
-    if (empty($invoice_id)) {
-        return;
-    }
-
-    // Hard stop after 2 days regardless of state.
-    $wcStatus = WcOrderStatus::tryFrom($order->get_status());
-
-    if (time() - $order->get_date_created()->getTimestamp() > 172800) {
-        wc_get_logger()->warning(
-            sprintf('Poller stopping for order %d: 2-day hard limit reached (WC=%s).', $order_id, $wcStatus?->value ?? 'unknown'),
-            ['source' => 'kalatori']
-        );
-        return;
-    }
-
-    // Stop when WC order is already in a final state — nothing left to sync.
-    if ($wcStatus?->isFinal()) {
-        wc_get_logger()->debug(
-            sprintf('Poller stopping for order %d: WC status %s is final.', $order_id, $wcStatus->value),
-            ['source' => 'kalatori']
-        );
-        return;
-    }
-
-    $gateway = new WC_Gateway_Kalatori();
-
-    // Poll daemon for current status and update WC if it changed.
-    $response = $gateway->api_request('GET', '/private/v3/invoice/get', null, ['invoice_id' => $invoice_id]);
-
-    if (is_wp_error($response)) {
-        wc_get_logger()->warning(
-            sprintf('Poller: invoice poll failed for order %d: %s', $order_id, $response->get_error_message()),
-            ['source' => 'kalatori']
-        );
-        as_schedule_single_action(time() + 3600, 'kalatori_poll_invoice_status', ['order_id' => $order_id], 'kalatori');
-        return;
-    }
-
-    $kalatoriStatus = KalatoriStatus::tryFrom($response['result']['status'] ?? '');
-
-    if ($kalatoriStatus !== null) {
-        $newWcStatus = $kalatoriStatus->toWcStatus();
-        $currentWcStatus = WcOrderStatus::tryFrom($order->get_status());
-        if ($newWcStatus !== $order->get_status() && !$currentWcStatus?->isFinal()) {
-            $order->update_status(
-                $newWcStatus,
-                sprintf(__('Kalatori poll: invoice %1$s — status: %2$s.', 'kalatori-payment-gateway'), $invoice_id, $kalatoriStatus->value)
-            );
-            wc_get_logger()->info(
-                sprintf('Poller updated order %d: Kalatori=%s, WC=%s.', $order_id, $kalatoriStatus->value, $order->get_status()),
-                ['source' => 'kalatori']
-            );
-        }
-    } else {
-        wc_get_logger()->warning(
-            sprintf('Poller received unknown Kalatori status "%s" for order %d.', $response['result']['status'] ?? '', $order_id),
-            ['source' => 'kalatori']
-        );
-    }
-
-    // Reschedule if Kalatori invoice is still active.
-    if ($kalatoriStatus?->isActive()) {
-        as_schedule_single_action(time() + 3600, 'kalatori_poll_invoice_status', ['order_id' => $order_id], 'kalatori');
-    }
-}
-
-/**
  * Cancel the Kalatori invoice in the daemon when a WooCommerce order is cancelled.
  * Fires on the `woocommerce_order_status_cancelled` action.
  *
@@ -556,6 +490,19 @@ function kalatori_cancel_invoice_on_wc_cancel(int $order_id): void
     }
 
     $gateway = new WC_Gateway_Kalatori();
+
+    $statusResponse = $gateway->api_request('GET', '/private/v3/invoice/get', null, ['invoice_id' => $invoice_id]);
+    if (!is_wp_error($statusResponse)) {
+        $kalatoriStatus = KalatoriStatus::tryFrom($statusResponse['result']['status'] ?? '');
+        if ($kalatoriStatus?->isFinal()) {
+            wc_get_logger()->info(
+                sprintf('Cancel skipped: invoice %s for order %d is already in final state (%s).', $invoice_id, $order_id, $kalatoriStatus->value),
+                ['source' => 'kalatori']
+            );
+            return;
+        }
+    }
+
     $response = $gateway->api_request('POST', '/private/v3/invoice/cancel', ['invoice_id' => $invoice_id]);
 
     if (is_wp_error($response)) {
@@ -580,9 +527,10 @@ function kalatori_cancel_invoice_on_wc_cancel(int $order_id): void
     );
 }
 
+
 /**
  * Handle incoming Kalatori webhook callbacks.
- * Status mapping is defined in {@see KalatoriStatus::toWcStatus()}.
+ * Status mapping is defined in {@see KalatoriEventType::toWcStatus()}.
  *
  * @param WP_REST_Request $request
  * @return WP_REST_Response
@@ -618,10 +566,10 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
     // Webhook body is GenericEvent<Invoice>: {"id":..., "event_type":..., "payload":{invoice}, ...}
     $data = json_decode($raw_body, true);
     $invoice_id = $data['payload']['id'] ?? '';
-    $status = $data['payload']['status'] ?? '';
+    $event_type = $data['event_type'] ?? '';
 
-    if (empty($invoice_id) || empty($status)) {
-        return new WP_REST_Response(['error' => 'Missing invoice id or status.'], 400);
+    if (empty($invoice_id) || empty($event_type)) {
+        return new WP_REST_Response(['error' => 'Missing invoice id or event_type.'], 400);
     }
 
     $orders = wc_get_orders([
@@ -638,33 +586,36 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
     }
 
     $order = $orders[0];
-    $kalatoriStatus = KalatoriStatus::tryFrom($status);
+    $kalatoriEvent = KalatoriEventType::tryFrom($event_type);
 
-    if ($kalatoriStatus !== null) {
-        $wc_status = $kalatoriStatus->toWcStatus();
+    if ($kalatoriEvent === null) {
+        wc_get_logger()->warning(
+            sprintf('Webhook: unknown event_type "%s" for invoice %s.', $event_type, $invoice_id),
+            ['source' => 'kalatori']
+        );
+        return new WP_REST_Response(['result' => 'ok'], 200);
+    }
+
+    $wc_status = $kalatoriEvent->toWcStatus();
+    if ($wc_status !== null) {
         $currentWcStatus = WcOrderStatus::tryFrom($order->get_status());
         if ($wc_status !== $order->get_status() && !$currentWcStatus?->isFinal()) {
             $order->update_status(
                 $wc_status,
                 sprintf(
-                /* translators: 1: Kalatori invoice ID, 2: Kalatori status */
-                    __('Kalatori invoice %1$s — status: %2$s.', 'kalatori-payment-gateway'),
+                /* translators: 1: Kalatori invoice ID, 2: Kalatori event type */
+                    __('Kalatori invoice %1$s — event: %2$s.', 'kalatori-payment-gateway'),
                     $invoice_id,
-                    $kalatoriStatus->value
+                    $event_type
                 )
             );
         }
-
-        wc_get_logger()->info(
-            sprintf('Webhook: order %d — Kalatori status %s → WC status %s.', $order->get_id(), $kalatoriStatus->value, $wc_status),
-            ['source' => 'kalatori']
-        );
-    } else {
-        wc_get_logger()->warning(
-            sprintf('Webhook received unknown Kalatori status "%s" for invoice %s.', $status, $invoice_id),
-            ['source' => 'kalatori']
-        );
     }
+
+    wc_get_logger()->info(
+        sprintf('Webhook: order %d — event %s → WC status %s.', $order->get_id(), $event_type, $wc_status ?? 'no-change'),
+        ['source' => 'kalatori']
+    );
 
     return new WP_REST_Response(['result' => 'ok'], 200);
 }
