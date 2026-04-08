@@ -150,10 +150,10 @@ function kalatori_init_gateway(): void
         public function get_payment_method_data(): array
         {
             return [
-                'title'       => __('Crypto (Kalatori)', 'kalatori-payment-gateway'),
+                'title' => __('Crypto (Kalatori)', 'kalatori-payment-gateway'),
                 'description' => __('Pay with cryptocurrency via Kalatori', 'kalatori-payment-gateway'),
-                'icon'        => plugin_dir_url(__FILE__) . 'assets/images/kalatori-logo.svg',
-                'supports'    => $this->get_supported_features(),
+                'icon' => plugin_dir_url(__FILE__) . 'assets/images/kalatori-logo.svg',
+                'supports' => $this->get_supported_features(),
             ];
         }
     }
@@ -216,7 +216,7 @@ function kalatori_init_gateway(): void
             $this->init_form_fields();
             $this->init_settings();
 
-            $this->title       = __('Crypto (Kalatori)', 'kalatori-payment-gateway');
+            $this->title = __('Crypto (Kalatori)', 'kalatori-payment-gateway');
             $this->description = __('Pay with cryptocurrency via Kalatori.', 'kalatori-payment-gateway');
             $this->icon = esc_url(plugin_dir_url(__FILE__) . 'assets/images/kalatori-logo.svg');
 
