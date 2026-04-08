@@ -13,18 +13,18 @@
 
     const {registerPaymentMethod} = window.wc.wcBlocksRegistry;
     const {__} = window.wp.i18n;
-    const {getPaymentMethodData} = window.wc.wcSettings;
+    const {getSetting} = window.wc.wcSettings;
     const {decodeEntities} = window.wp.htmlEntities;
     const {createElement, RawHTML} = window.wp.element;
 
-    const settings = getPaymentMethodData('kalatori', {});
+    const settings = getSetting('paymentMethodData', {})['kalatori'] || {};
     const defaultLabel = __('Crypto (Kalatori)', 'kalatori-payment-gateway');
     const label = decodeEntities(settings?.title || '') || defaultLabel;
 
     const icon = settings?.icon
         ? createElement('img', {
             src: settings.icon,
-            alt: 'Kalatori',
+            alt: __('Kalatori', 'kalatori-payment-gateway'),
             width: 24,
             height: 24,
         })

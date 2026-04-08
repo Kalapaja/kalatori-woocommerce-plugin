@@ -150,10 +150,10 @@ function kalatori_init_gateway(): void
         public function get_payment_method_data(): array
         {
             return [
-                'title' => $this->get_setting('title'),
-                'description' => $this->get_setting('description'),
-                'icon' => plugin_dir_url(__FILE__) . 'assets/images/kalatori-logo.svg',
-                'supports' => $this->get_supported_features(),
+                'title'       => __('Kalatori', 'kalatori-payment-gateway'),
+                'description' => __('Pay with cryptocurrency via Kalatori', 'kalatori-payment-gateway'),
+                'icon'        => plugin_dir_url(__FILE__) . 'assets/images/kalatori-logo.svg',
+                'supports'    => $this->get_supported_features(),
             ];
         }
     }
@@ -187,7 +187,7 @@ function kalatori_init_gateway(): void
     {
 
         /**
-         * Load settings from DB then merge `kalatori.json` on top (file wins).
+         * Load settings from DB then merge `woocommerce-kalatori-config.json.json` on first run.
          */
         public function init_settings(): void
         {
@@ -210,14 +210,14 @@ function kalatori_init_gateway(): void
             $this->id = 'kalatori';
             $this->has_fields = false;
             $this->method_title = __('Kalatori', 'kalatori-payment-gateway');
-            $this->method_description = __('Accept crypto payments on Polygon via a Kalatori daemon.', 'kalatori-payment-gateway');
+            $this->method_description = __('Accept crypto payments on Polygon via a Kalatori daemon', 'kalatori-payment-gateway');
             $this->supports = ['products'];
 
             $this->init_form_fields();
             $this->init_settings();
 
-            $this->title = $this->get_option('title');
-            $this->description = $this->get_option('description');
+            $this->title       = __('Kalatori', 'kalatori-payment-gateway');
+            $this->description = __('Pay with cryptocurrency on the Polygon network via Kalatori.', 'kalatori-payment-gateway');
             $this->icon = esc_url(plugin_dir_url(__FILE__) . 'assets/images/kalatori-logo.svg');
 
             add_action(
@@ -520,7 +520,7 @@ function kalatori_poll_invoice_status_handler(int $order_id): void
         if ($newWcStatus !== $order->get_status() && !$currentWcStatus?->isFinal()) {
             $order->update_status(
                 $newWcStatus,
-                sprintf('Kalatori poll: invoice %s — status: %s.', $invoice_id, $kalatoriStatus->value)
+                sprintf(__('Kalatori poll: invoice %1$s — status: %2$s.', 'kalatori-payment-gateway'), $invoice_id, $kalatoriStatus->value)
             );
         }
 
