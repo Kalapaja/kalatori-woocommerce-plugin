@@ -34,28 +34,6 @@ enum KalatoriStatus: string
     case CustomerCanceled = 'CustomerCanceled';
     /** Invoice was cancelled by the merchant or admin via the API. */
     case AdminCanceled = 'AdminCanceled';
-
-    /** No further payment transitions can occur. */
-    public function isFinal(): bool
-    {
-        return match ($this) {
-            self::Paid, self::OverPaid,
-            self::UnpaidExpired, self::PartiallyPaidExpired,
-            self::CustomerCanceled, self::AdminCanceled => true,
-            default => false,
-        };
-    }
-
-    /** Map to the corresponding WooCommerce order status slug. */
-    public function toWcStatus(): string
-    {
-        return match ($this) {
-            self::Waiting => 'pending',
-            self::Paid, self::OverPaid => 'processing',
-            self::PartiallyPaid => 'on-hold',
-            self::UnpaidExpired, self::PartiallyPaidExpired, self::CustomerCanceled, self::AdminCanceled => 'cancelled',
-        };
-    }
 }
 
 /**
@@ -63,23 +41,13 @@ enum KalatoriStatus: string
  */
 enum WcOrderStatus: string
 {
-    case Pending = 'pending';
+    case Pending    = 'pending';
     case Processing = 'processing';
-    case OnHold = 'on-hold';
-    case Completed = 'completed';
-    case Cancelled = 'cancelled';
-    case Failed = 'failed';
-    case Refunded = 'refunded';
-
-    /** Order has reached a terminal state — no further payment action expected. */
-    public function isFinal(): bool
-    {
-        return match ($this) {
-            self::Processing, self::Completed,
-            self::Cancelled, self::Failed, self::Refunded => true,
-            default => false,
-        };
-    }
+    case OnHold     = 'on-hold';
+    case Completed  = 'completed';
+    case Cancelled  = 'cancelled';
+    case Failed     = 'failed';
+    case Refunded   = 'refunded';
 }
 
 /**
@@ -95,14 +63,30 @@ enum KalatoriEventType: string
     case AdminCanceled    = 'admin_canceled';
     case CustomerCanceled = 'customer_canceled';
 
-    /** Map to WC order status slug, or null when no status transition is needed. */
-    public function toWcStatus(): ?string
+    /** Human-readable one-sentence order note for the WC order history. */
+    public function toOrderNote(): string
     {
         return match ($this) {
-            self::Paid             => 'processing',
-            self::PartiallyPaid    => 'on-hold',
-            self::Expired, self::AdminCanceled, self::CustomerCanceled => 'cancelled',
-            self::Created,
+            self::Created          => __('Awaiting cryptocurrency payment via Kalatori.', 'kalatori-payment-gateway'),
+            self::Paid             => __('Payment completed via Kalatori.', 'kalatori-payment-gateway'),
+            self::PartiallyPaid    => __('Partial payment received via Kalatori; awaiting remaining balance.', 'kalatori-payment-gateway'),
+            self::Expired          => __('Kalatori invoice expired without full payment.', 'kalatori-payment-gateway'),
+            self::AdminCanceled    => __('Kalatori invoice cancelled by the merchant.', 'kalatori-payment-gateway'),
+            self::CustomerCanceled => __('Kalatori invoice cancelled by the customer.', 'kalatori-payment-gateway'),
+            self::Updated          => '',
+        };
+    }
+
+    /** Map to WC order status, or null when no status transition is needed. */
+    public function toWcStatus(): ?WcOrderStatus
+    {
+        return match ($this) {
+            self::Paid             => WcOrderStatus::Processing,
+            self::PartiallyPaid    => WcOrderStatus::OnHold,
+            self::Expired,
+            self::AdminCanceled,
+            self::CustomerCanceled => WcOrderStatus::Cancelled,
+            self::Created          => WcOrderStatus::Pending,
             self::Updated          => null,
         };
     }
@@ -113,9 +97,8 @@ add_action('plugins_loaded', 'kalatori_init_gateway');
 /**
  * Bootstrap the Kalatori payment gateway once WooCommerce is available.
  *
- * Registers the gateway class, the WooCommerce Blocks integration, the webhook
- * REST route, and the background action handlers. Bails early if WooCommerce is
- * not active.
+ * Registers the gateway class, the WooCommerce Blocks integration, and the webhook
+ * REST route. Bails early if WooCommerce is not active.
  */
 function kalatori_init_gateway(): void
 {
@@ -189,8 +172,7 @@ function kalatori_init_gateway(): void
      *
      * Redirect-based gateway that creates a Kalatori invoice for each order and
      * sends the customer to the daemon-hosted payment page. Payment status updates
-     * are delivered via HMAC-signed webhooks; as a fallback, status is synced
-     * on-demand when the customer or admin views the order page.
+     * are delivered via HMAC-signed webhooks.
      *
      * Order meta keys used by this gateway:
      *  - `_kalatori_invoice_id`   UUID of the Kalatori invoice (set on first payment attempt).
@@ -202,7 +184,7 @@ function kalatori_init_gateway(): void
     {
 
         /**
-         * Load settings from DB then merge `woocommerce-kalatori-config.json.json` on first run.
+         * Load settings from DB then merge `woocommerce-kalatori-config.json` on first run.
          */
         public function init_settings(): void
         {
@@ -280,7 +262,6 @@ function kalatori_init_gateway(): void
          * (e.g. "123" → "123-2") to guarantee a unique daemon order ID on retries.
          *
          * On success, empties the cart and redirects the customer to the Kalatori payment page.
-         * Status is synced on-demand when the order page is viewed (webhook fallback).
          *
          * @param int $order_id WooCommerce order ID.
          * @return array{result: string, redirect?: string} WC payment result array.
@@ -387,7 +368,6 @@ function kalatori_init_gateway(): void
 
             $order->update_meta_data('_kalatori_invoice_id', $invoice_id);
             $order->update_meta_data('_kalatori_payment_url', $payment_url);
-            $order->update_status('pending', __('Awaiting Kalatori crypto payment.', 'kalatori-payment-gateway'));
             $order->save();
 
             wc_get_logger()->info(
@@ -407,7 +387,7 @@ function kalatori_init_gateway(): void
          * Send a HMAC-signed request to the Kalatori private API.
          *
          * @param string $method HTTP method (GET|POST).
-         * @param string $path API path (e.g. /private/v3/invoice/get). Signature is computed over $path only, not the query string.
+         * @param string $path API path (e.g. /private/v3/invoice/get). For GET requests the signature covers the sorted query string; for POST it covers the JSON body.
          * @param array|null $body Request body (will be JSON-encoded). Null for GET requests.
          * @param array|null $query Query string parameters for GET requests (e.g. ['invoice_id' => $uuid]).
          * @return array|\WP_Error Decoded response body or WP_Error on failure.
@@ -494,9 +474,13 @@ function kalatori_cancel_invoice_on_wc_cancel(int $order_id): void
     $statusResponse = $gateway->api_request('GET', '/private/v3/invoice/get', null, ['invoice_id' => $invoice_id]);
     if (!is_wp_error($statusResponse)) {
         $kalatoriStatus = KalatoriStatus::tryFrom($statusResponse['result']['status'] ?? '');
-        if ($kalatoriStatus?->isFinal()) {
+        if ($kalatoriStatus === KalatoriStatus::CustomerCanceled
+            || $kalatoriStatus === KalatoriStatus::AdminCanceled
+            || $kalatoriStatus === KalatoriStatus::UnpaidExpired
+            || $kalatoriStatus === KalatoriStatus::PartiallyPaidExpired
+        ) {
             wc_get_logger()->info(
-                sprintf('Cancel skipped: invoice %s for order %d is already in final state (%s).', $invoice_id, $order_id, $kalatoriStatus->value),
+                sprintf('Cancel skipped: invoice %s for order %d is already cancelled or expired (%s).', $invoice_id, $order_id, $kalatoriStatus->value),
                 ['source' => 'kalatori']
             );
             return;
@@ -598,22 +582,11 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
 
     $wc_status = $kalatoriEvent->toWcStatus();
     if ($wc_status !== null) {
-        $currentWcStatus = WcOrderStatus::tryFrom($order->get_status());
-        if ($wc_status !== $order->get_status() && !$currentWcStatus?->isFinal()) {
-            $order->update_status(
-                $wc_status,
-                sprintf(
-                /* translators: 1: Kalatori invoice ID, 2: Kalatori event type */
-                    __('Kalatori invoice %1$s — event: %2$s.', 'kalatori-payment-gateway'),
-                    $invoice_id,
-                    $event_type
-                )
-            );
-        }
+        $order->update_status($wc_status->value, $kalatoriEvent->toOrderNote());
     }
 
     wc_get_logger()->info(
-        sprintf('Webhook: order %d — event %s → WC status %s.', $order->get_id(), $event_type, $wc_status ?? 'no-change'),
+        sprintf('Webhook: order %d — event %s → WC status %s.', $order->get_id(), $event_type, $wc_status?->value ?? 'no-change'),
         ['source' => 'kalatori']
     );
 

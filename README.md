@@ -8,7 +8,6 @@ self-hosted [Kalatori](https://github.com/Kalapaja/kalatori) daemon.
 - WordPress ≥ 6.0
 - PHP ≥ 8.0
 - WooCommerce (declared as a required plugin — WordPress enforces this automatically)
-- Action Scheduler (bundled with WooCommerce)
 - USD-denominated WooCommerce store
 
 ## Installation
@@ -82,6 +81,12 @@ npx wp-env start
 ```
 
 This creates demo products and pre-configures the gateway pointing at `http://host.docker.internal:8080`.
+
+Configure your Kalatori daemon to send webhooks to:
+
+```
+http://host.docker.internal:8888/wp-json/kalatori/v1/webhook
+```
 
 | URL                              |                              |
 |----------------------------------|------------------------------|
