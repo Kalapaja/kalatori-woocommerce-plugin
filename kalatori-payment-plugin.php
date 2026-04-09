@@ -180,15 +180,17 @@ function kalatori_init_gateway(): void
      */
     class WC_Gateway_Kalatori extends WC_Payment_Gateway
     {
+        private const CONFIG_VERSION = '1';
 
         /**
          * Load settings from DB then merge `woocommerce-kalatori-config.json` on first run.
+         * Bump CONFIG_VERSION to force a re-apply on existing installs.
          */
         public function init_settings(): void
         {
             parent::init_settings();
-            if (!empty($this->settings['daemon_url'])) {
-                return; // Already configured — skip file override.
+            if (($this->settings['_config_version'] ?? '') === self::CONFIG_VERSION) {
+                return; // Config already applied for this version.
             }
             $config_file = plugin_dir_path(__FILE__) . 'woocommerce-kalatori-config.json';
             if (!file_exists($config_file)) {
@@ -197,6 +199,8 @@ function kalatori_init_gateway(): void
             $file_config = json_decode(file_get_contents($config_file), true);
             if (is_array($file_config)) {
                 $this->settings = array_merge($this->settings, $file_config);
+                $this->settings['_config_version'] = self::CONFIG_VERSION;
+                update_option($this->get_option_key(), $this->settings);
             }
         }
 
