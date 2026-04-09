@@ -82,11 +82,11 @@ enum KalatoriEventType: string
     {
         return match ($this) {
             self::Paid             => WcOrderStatus::Processing,
-            self::PartiallyPaid    => WcOrderStatus::OnHold,
             self::Expired,
             self::AdminCanceled,
             self::CustomerCanceled => WcOrderStatus::Cancelled,
-            self::Created          => WcOrderStatus::Pending,
+            self::Created,
+            self::PartiallyPaid    => WcOrderStatus::Pending,
             self::Updated          => null,
         };
     }
