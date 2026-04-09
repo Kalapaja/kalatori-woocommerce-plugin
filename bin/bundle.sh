@@ -17,10 +17,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$DAEMON_URL" || -z "$SECRET_KEY" || -z "$ADMIN_URL" ]]; then
-    echo "Usage: $0 --daemon_url <url> --secret_key <key> --admin_url <url>" >&2
-    exit 1
-fi
 
 PLUGIN_SLUG="kalatori-payment-plugin"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,9 +36,11 @@ rsync -a \
     --exclude='*' \
     "$ROOT_DIR/" "$TMP_DIR/$PLUGIN_SLUG/"
 
-printf '{\n  "daemon_url": "%s",\n  "secret_key": "%s",\n  "admin_url": "%s"\n}\n' \
-    "$DAEMON_URL" "$SECRET_KEY" "$ADMIN_URL" \
-    > "$TMP_DIR/$PLUGIN_SLUG/woocommerce-kalatori-config.json"
+if [[ -n "$DAEMON_URL" || -n "$SECRET_KEY" || -n "$ADMIN_URL" ]]; then
+    printf '{\n  "daemon_url": "%s",\n  "secret_key": "%s",\n  "admin_url": "%s"\n}\n' \
+        "$DAEMON_URL" "$SECRET_KEY" "$ADMIN_URL" \
+        > "$TMP_DIR/$PLUGIN_SLUG/woocommerce-kalatori-config.json"
+fi
 
 rm -f "$OUT_FILE"
 cd "$TMP_DIR"
