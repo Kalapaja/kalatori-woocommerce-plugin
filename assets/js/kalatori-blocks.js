@@ -6,7 +6,7 @@
         style.id = 'wc-kalatori-styles';
         style.textContent = `
 .wc-kalatori-label { display: inline-flex; align-items: center; font-weight: 600; }
-.wc-kalatori-label img { flex-shrink: 0; margin-right: 12px; }
+.wc-kalatori-label img { display: inline-flex; flex-shrink: 0; margin-right: 12px; }
 .wc-kalatori-content { display: flex; align-items: flex-start; }`;
         document.head.appendChild(style);
     }

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Kalatori Payment Gateway
  * Description: Accept crypto payments via a self-hosted Kalatori daemon.
- * Version: 0.0.4
+ * Version: 0.0.5
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Requires Plugins: woocommerce
@@ -676,3 +676,4 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
 
     return new WP_REST_Response(['result' => 'ok'], 200);
 }
+
