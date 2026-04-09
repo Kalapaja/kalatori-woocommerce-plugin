@@ -18,21 +18,13 @@ if (!defined('ABSPATH')) {
  */
 enum KalatoriStatus: string
 {
-    /** Customer has not yet sent any funds; invoice is open. */
     case Waiting = 'Waiting';
-    /** Full amount received — invoice is complete. */
     case Paid = 'Paid';
-    /** More than the requested amount was received. */
     case OverPaid = 'OverPaid';
-    /** Some funds received but less than the full amount; invoice is still open. */
     case PartiallyPaid = 'PartiallyPaid';
-    /** Invoice expired while only partially funded. */
     case PartiallyPaidExpired = 'PartiallyPaidExpired';
-    /** Invoice expired with no payment received. */
     case UnpaidExpired = 'UnpaidExpired';
-    /** Customer explicitly cancelled the invoice via the payment page. */
     case CustomerCanceled = 'CustomerCanceled';
-    /** Invoice was cancelled by the merchant or admin via the API. */
     case AdminCanceled = 'AdminCanceled';
 }
 
@@ -249,6 +241,13 @@ function kalatori_init_gateway(): void
                     'title' => __('Secret Key', 'kalatori-payment-gateway'),
                     'type' => 'password',
                     'description' => __('HMAC-SHA256 secret used to sign requests to the private Kalatori API.', 'kalatori-payment-gateway'),
+                    'default' => '',
+                    'desc_tip' => true,
+                ],
+                'admin_url' => [
+                    'title' => __('Admin URL', 'kalatori-payment-gateway'),
+                    'type' => 'text',
+                    'description' => __('URL of the Kalatori daemon admin interface.', 'kalatori-payment-gateway'),
                     'default' => '',
                     'desc_tip' => true,
                 ],

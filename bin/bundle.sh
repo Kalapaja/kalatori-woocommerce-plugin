@@ -6,17 +6,19 @@ set -euo pipefail
 
 DAEMON_URL=""
 SECRET_KEY=""
+ADMIN_URL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --daemon_url) DAEMON_URL="$2"; shift 2 ;;
         --secret_key) SECRET_KEY="$2"; shift 2 ;;
+        --admin_url)  ADMIN_URL="$2";  shift 2 ;;
         *) echo "Unknown parameter: $1" >&2; exit 1 ;;
     esac
 done
 
-if [[ -z "$DAEMON_URL" || -z "$SECRET_KEY" ]]; then
-    echo "Usage: $0 --daemon_url <url> --secret_key <key>" >&2
+if [[ -z "$DAEMON_URL" || -z "$SECRET_KEY" || -z "$ADMIN_URL" ]]; then
+    echo "Usage: $0 --daemon_url <url> --secret_key <key> --admin_url <url>" >&2
     exit 1
 fi
 
@@ -38,7 +40,8 @@ rsync -a \
     --exclude='*' \
     "$ROOT_DIR/" "$TMP_DIR/$PLUGIN_SLUG/"
 
-printf '{\n  "daemon_url": "%s",\n  "secret_key": "%s"\n}\n' "$DAEMON_URL" "$SECRET_KEY" \
+printf '{\n  "daemon_url": "%s",\n  "secret_key": "%s",\n  "admin_url": "%s"\n}\n' \
+    "$DAEMON_URL" "$SECRET_KEY" "$ADMIN_URL" \
     > "$TMP_DIR/$PLUGIN_SLUG/woocommerce-kalatori-config.json"
 
 rm -f "$OUT_FILE"
