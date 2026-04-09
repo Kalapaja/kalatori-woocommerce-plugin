@@ -2,10 +2,12 @@
 /**
  * Plugin Name: Kalatori Payment Gateway
  * Description: Accept crypto payments via a self-hosted Kalatori daemon.
- * Version: 0.0.1
+ * Version: 0.0.3
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Requires Plugins: woocommerce
+ * Author: Kalapaja
+ * Author URI: https://github.com/Kalapaja
  * Text Domain: kalatori-payment-gateway
  */
 
@@ -151,6 +153,10 @@ function kalatori_init_gateway(): void
 
     add_action('woocommerce_order_status_cancelled', 'kalatori_cancel_invoice_on_wc_cancel');
 
+    add_action('wp_ajax_kalatori_test_connection', static function (): void {
+        (new WC_Gateway_Kalatori())->handle_test_connection_ajax();
+    });
+
     add_action('rest_api_init', static function (): void {
         register_rest_route('kalatori/v1', '/webhook', [
             'methods' => 'POST',
@@ -251,7 +257,73 @@ function kalatori_init_gateway(): void
                     'default' => '',
                     'desc_tip' => true,
                 ],
+                'test_connection' => [
+                    'title' => __('Connection', 'kalatori-payment-gateway'),
+                    'type'  => 'test_connection',
+                ],
             ];
+        }
+
+        public function generate_test_connection_html(string $key, array $data): string
+        {
+            $nonce        = wp_create_nonce('kalatori_test_connection');
+            $field_prefix = 'woocommerce_' . $this->id . '_';
+            ob_start(); ?>
+            <tr>
+                <th><?= esc_html($data['title']) ?></th>
+                <td>
+                    <div style="display:flex;align-items:center;gap:8px">
+                        <button type="button" id="kalatori-test-btn" class="button">
+                            <?= esc_html__('Test connection', 'kalatori-payment-gateway') ?>
+                        </button>
+                        <span id="kalatori-test-result"></span>
+                    </div>
+                    <script>
+                    jQuery('#kalatori-test-btn').on('click', function () {
+                        var btn    = jQuery(this);
+                        var result = jQuery('#kalatori-test-result');
+                        btn.prop('disabled', true);
+                        result.removeAttr('style').text('<?= esc_js(__('Testing…', 'kalatori-payment-gateway')) ?>');
+                        jQuery.post(ajaxurl, {
+                            action:     'kalatori_test_connection',
+                            _wpnonce:   '<?= esc_js($nonce) ?>',
+                            daemon_url: jQuery('#<?= esc_js($field_prefix) ?>daemon_url').val(),
+                            secret_key: jQuery('#<?= esc_js($field_prefix) ?>secret_key').val(),
+                        }, function (response) {
+                            result.text(response.data).css('color', response.success ? 'green' : 'red');
+                        }).always(function () { btn.prop('disabled', false); });
+                    });
+                    </script>
+                </td>
+            </tr>
+            <?php return ob_get_clean();
+        }
+
+        public function handle_test_connection_ajax(): void
+        {
+            check_ajax_referer('kalatori_test_connection');
+            if (!current_user_can('manage_woocommerce')) {
+                wp_send_json_error(__('Permission denied.', 'kalatori-payment-gateway'));
+            }
+
+            $this->settings['daemon_url'] = sanitize_url(wp_unslash($_POST['daemon_url'] ?? ''));
+            $this->settings['secret_key'] = sanitize_text_field(wp_unslash($_POST['secret_key'] ?? ''));
+
+            $response = $this->api_request(
+                'GET', '/private/v3/invoice/get', null,
+                ['invoice_id' => '00000000-0000-0000-0000-000000000000']
+            );
+
+            if (!is_wp_error($response) || str_starts_with($response->get_error_code(), 'kalatori_')) {
+                $http_code = is_wp_error($response) ? ($response->get_error_data()['http_code'] ?? 0) : 200;
+                if ($http_code === 401) {
+                    wp_send_json_error(__('Invalid credentials.', 'kalatori-payment-gateway'));
+                } else {
+                    wp_send_json_success(__('Connected successfully.', 'kalatori-payment-gateway'));
+                }
+            } else {
+                wp_send_json_error(__('Daemon unreachable — check the Daemon URL.', 'kalatori-payment-gateway'));
+            }
         }
 
         /**
@@ -444,8 +516,9 @@ function kalatori_init_gateway(): void
             $decoded = json_decode($raw_body, true);
 
             if ($http_code < 200 || $http_code >= 300) {
+                $error_type    = $decoded['error']['type'] ?? $decoded['error']['category'] ?? 'api_error';
                 $error_message = $decoded['error']['message'] ?? "HTTP {$http_code}";
-                return new \WP_Error('kalatori_api', $error_message);
+                return new \WP_Error('kalatori_' . $error_type, $error_message, ['http_code' => $http_code]);
             }
 
             return $decoded ?? [];
@@ -546,6 +619,12 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
         return new WP_REST_Response(['error' => 'Invalid signature.'], 401);
     }
 
+    $dedup_key = 'kalatori_wh_' . md5($raw_body);
+    if (get_transient($dedup_key)) {
+        wc_get_logger()->info('Webhook: duplicate delivery ignored.', ['source' => 'kalatori']);
+        return new WP_REST_Response(['result' => 'ok'], 200);
+    }
+
     // Webhook body is GenericEvent<Invoice>: {"id":..., "event_type":..., "payload":{invoice}, ...}
     $data = json_decode($raw_body, true);
     $invoice_id = $data['payload']['id'] ?? '';
@@ -583,6 +662,8 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
     if ($wc_status !== null) {
         $order->update_status($wc_status->value, $kalatoriEvent->toOrderNote());
     }
+
+    set_transient($dedup_key, 1, DAY_IN_SECONDS);
 
     wc_get_logger()->info(
         sprintf('Webhook: order %d — event %s → WC status %s.', $order->get_id(), $event_type, $wc_status?->value ?? 'no-change'),
