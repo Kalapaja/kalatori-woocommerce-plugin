@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bundle the plugin into a ZIP archive suitable for WordPress "Add Plugin" upload.
-# The ZIP contains a single `kalatori-payment-plugin/` folder as WP requires.
+# The ZIP contains a single `kalatori-woocommerce-plugin/` folder as WP requires.
 
 set -euo pipefail
 
@@ -18,11 +18,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 
-PLUGIN_SLUG="kalatori-payment-plugin"
+PLUGIN_SLUG="kalatori-woocommerce-plugin"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-VERSION=$(grep -m1 'Version:' "$ROOT_DIR/kalatori-payment-plugin.php" | awk '{print $NF}')
+VERSION=$(grep -m1 'Version:' "$ROOT_DIR/kalatori-woocommerce-plugin.php" | awk '{print $NF}')
 OUT_FILE="$ROOT_DIR/${PLUGIN_SLUG}.zip"
 TMP_DIR=$(mktemp -d)
 
@@ -30,7 +30,7 @@ cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 
 rsync -a \
-    --include='kalatori-payment-plugin.php' \
+    --include='kalatori-woocommerce-plugin.php' \
     --include='assets/' \
     --include='assets/**' \
     --exclude='*' \

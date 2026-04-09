@@ -50,7 +50,7 @@ database option is still empty:
 ```bash
 ./bin/bundle.sh                                          # generic ZIP, no pre-baked config
 ./bin/bundle.sh --daemon_url <url> --secret_key <key> --admin_url <url>  # pre-configured ZIP
-# Output: kalatori-payment-plugin.zip
+# Output: kalatori-woocommerce-plugin.zip
 ```
 
 | Flag           | Description                              |
@@ -74,7 +74,7 @@ plugin.
 
 ## Releasing
 
-1. Update `Version: x.y.z` in `kalatori-payment-plugin.php`.
+1. Update `Version: x.y.z` in `kalatori-woocommerce-plugin.php`.
 2. Commit and push to `main`.
 3. Tag and push:
    ```bash
