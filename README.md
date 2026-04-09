@@ -18,12 +18,11 @@ self-hosted [Kalatori](https://github.com/Kalapaja/kalatori) daemon.
 
 ## Configuration
 
-Two parameters are required:
-
 | Parameter    | Description                                                                                                 |
 |--------------|-------------------------------------------------------------------------------------------------------------|
 | `daemon_url` | Base URL of your self-hosted Kalatori daemon, e.g. `https://pay.yourshop.com`                               |
 | `secret_key` | HMAC-SHA256 secret shared with the daemon — used to sign outgoing API requests and verify incoming webhooks |
+| `admin_url`  | URL of the Kalatori daemon admin interface                                                                   |
 
 ### Option A — WooCommerce admin UI
 
@@ -37,7 +36,8 @@ database option is still empty:
 ```json
 {
   "daemon_url": "https://pay.yourshop.com",
-  "secret_key": "your-hmac-secret"
+  "secret_key": "your-hmac-secret",
+  "admin_url":  "https://admin.yourshop.com"
 }
 ```
 
@@ -45,19 +45,21 @@ database option is still empty:
 
 ## Building
 
-`bin/bundle.sh` creates a distributable ZIP ready for WordPress upload.
+`bin/bundle.sh` creates a distributable ZIP ready for WordPress upload. All flags are optional.
 
 ```bash
-./bin/bundle.sh --daemon_url <url> --secret_key <key>
+./bin/bundle.sh                                          # generic ZIP, no pre-baked config
+./bin/bundle.sh --daemon_url <url> --secret_key <key> --admin_url <url>  # pre-configured ZIP
 # Output: kalatori-payment-plugin.zip
 ```
 
-| Flag           | Required | Description                |
-|----------------|----------|----------------------------|
-| `--daemon_url` | yes      | Kalatori daemon base URL   |
-| `--secret_key` | yes      | HMAC-SHA256 signing secret |
+| Flag           | Description                              |
+|----------------|------------------------------------------|
+| `--daemon_url` | Kalatori daemon base URL                 |
+| `--secret_key` | HMAC-SHA256 signing secret               |
+| `--admin_url`  | Kalatori daemon admin interface URL      |
 
-The config is baked into the ZIP as `woocommerce-kalatori-config.json`, so no admin setup is needed after installation.
+When at least one flag is provided, the values are baked into the ZIP as `woocommerce-kalatori-config.json` and loaded automatically on first install. Otherwise no config file is included and the merchant configures the gateway via the WooCommerce admin UI.
 
 ## Webhook
 
@@ -69,6 +71,19 @@ POST /wp-json/kalatori/v1/webhook
 
 Configure this URL in your daemon. All requests must be HMAC-SHA256 signed using the same `secret_key` configured in the
 plugin.
+
+## Releasing
+
+1. Update `Version: x.y.z` in `kalatori-payment-plugin.php`.
+2. Commit and push to `main`.
+3. Tag and push:
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+
+GitHub Actions builds the plugin ZIP and publishes it as a GitHub Release automatically.
+The version in the ZIP is set from the tag name.
 
 ## Local development
 
