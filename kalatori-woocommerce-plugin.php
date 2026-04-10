@@ -78,12 +78,27 @@ enum KalatoriEventType: string
             self::Expired,
             self::AdminCanceled    => WcOrderStatus::Cancelled,
             self::CustomerCanceled => WcOrderStatus::Pending,
-            self::Created          => WcOrderStatus::OnHold,
-            self::Paid          => WcOrderStatus::Processing,
+            self::Paid,
+            self::Created,
             self::PartiallyPaid,
             self::Updated          => null,
         };
     }
+}
+
+register_activation_hook(__FILE__, 'kalatori_activate');
+register_deactivation_hook(__FILE__, 'kalatori_deactivate');
+
+function kalatori_activate(): void
+{
+    if (!as_has_scheduled_action('kalatori_reconcile_orders')) {
+        as_schedule_recurring_action(time() + HOUR_IN_SECONDS, HOUR_IN_SECONDS, 'kalatori_reconcile_orders');
+    }
+}
+
+function kalatori_deactivate(): void
+{
+    as_unschedule_all_actions('kalatori_reconcile_orders');
 }
 
 add_action('plugins_loaded', 'kalatori_init_gateway');
@@ -153,6 +168,8 @@ function kalatori_init_gateway(): void
 
     add_action('woocommerce_order_status_cancelled', 'kalatori_cancel_invoice_on_wc_cancel');
     add_action('woocommerce_update_order', 'kalatori_update_invoice_on_order_edit');
+    add_action('kalatori_reconcile_orders', 'kalatori_reconcile_orders_handler');
+    add_action('action_scheduler_ensure_recurring_actions', 'kalatori_activate');
 
     add_action('wp_ajax_kalatori_test_connection', static function (): void {
         (new WC_Gateway_Kalatori())->handle_test_connection_ajax();
@@ -467,7 +484,7 @@ function kalatori_init_gateway(): void
             $order->update_meta_data('_kalatori_payment_url', $payment_url);
             $order->update_meta_data('_kalatori_invoice_amount', (string)$order->get_total());
             $order->set_transaction_id($invoice_id);
-            $order->save();
+            $order->update_status(WcOrderStatus::OnHold->value, __('Awaiting cryptocurrency payment via Kalatori.', 'kalatori-payment-gateway'));
 
             wc_get_logger()->info(
                 sprintf('Invoice created: id=%s, redirect=%s', $invoice_id, $payment_url),
@@ -659,6 +676,127 @@ function kalatori_update_invoice_on_order_edit(int $order_id): void
 }
 
 /**
+ * Reconcile all on-hold Kalatori orders against the daemon.
+ * Scheduled hourly by Action Scheduler. Catches orders whose webhooks were missed.
+ */
+function kalatori_reconcile_orders_handler(int $page = 1): void
+{
+    $batch_size = 50;
+    $orders = wc_get_orders([
+        'status'         => WcOrderStatus::OnHold->value,
+        'payment_method' => 'kalatori',
+        'limit'          => $batch_size,
+        'paged'          => $page,
+        'meta_query'     => [[
+            'key'     => '_kalatori_invoice_id',
+            'compare' => 'EXISTS',
+        ]],
+    ]);
+
+    if (empty($orders)) {
+        return;
+    }
+
+    wc_get_logger()->info(
+        sprintf('Reconciliation: checking %d on-hold Kalatori order(s) (page %d).', count($orders), $page),
+        ['source' => 'kalatori']
+    );
+
+    $gateway = new WC_Gateway_Kalatori();
+
+    foreach ($orders as $order) {
+        kalatori_reconcile_single_order($order, $gateway);
+    }
+
+    // Full batch — there may be more; queue next page as a separate async action.
+    if (count($orders) === $batch_size) {
+        as_enqueue_async_action('kalatori_reconcile_orders', ['page' => $page + 1]);
+    }
+}
+
+/**
+ * Fetch the current invoice status from the daemon and reconcile a single order.
+ *
+ * @param WC_Order           $order
+ * @param WC_Gateway_Kalatori $gateway
+ */
+function kalatori_reconcile_single_order(WC_Order $order, WC_Gateway_Kalatori $gateway): void
+{
+    $order_id   = $order->get_id();
+    $invoice_id = $order->get_meta('_kalatori_invoice_id');
+
+    $response = $gateway->api_request('GET', '/private/v3/invoice/get', null, ['invoice_id' => $invoice_id]);
+
+    if (is_wp_error($response)) {
+        wc_get_logger()->warning(
+            sprintf('Reconciliation: failed to fetch invoice %s for order %d: %s', $invoice_id, $order_id, $response->get_error_message()),
+            ['source' => 'kalatori']
+        );
+        return;
+    }
+
+    $kalatoriStatus = KalatoriStatus::tryFrom($response['result']['status'] ?? '');
+
+    if ($kalatoriStatus === null) {
+        wc_get_logger()->warning(
+            sprintf('Reconciliation: unknown invoice status for order %d.', $order_id),
+            ['source' => 'kalatori']
+        );
+        return;
+    }
+
+    switch ($kalatoriStatus) {
+        case KalatoriStatus::Waiting:
+        case KalatoriStatus::PartiallyPaid:
+            return;
+
+        case KalatoriStatus::Paid:
+        case KalatoriStatus::OverPaid:
+            $order->payment_complete($invoice_id);
+            $order->add_order_note(__('Reconciliation: payment confirmed via Kalatori.', 'kalatori-payment-gateway'));
+            wc_get_logger()->info(
+                sprintf('Reconciliation: order %d marked as paid (invoice status: %s).', $order_id, $kalatoriStatus->value),
+                ['source' => 'kalatori']
+            );
+            return;
+
+        case KalatoriStatus::UnpaidExpired:
+        case KalatoriStatus::PartiallyPaidExpired:
+            $order->update_status(
+                WcOrderStatus::Cancelled->value,
+                __('Reconciliation: Kalatori invoice expired without full payment.', 'kalatori-payment-gateway')
+            );
+            wc_get_logger()->info(
+                sprintf('Reconciliation: order %d cancelled — expired invoice (%s).', $order_id, $kalatoriStatus->value),
+                ['source' => 'kalatori']
+            );
+            return;
+
+        case KalatoriStatus::CustomerCanceled:
+            $order->update_status(
+                WcOrderStatus::Pending->value,
+                __('Reconciliation: Kalatori invoice was cancelled by the customer.', 'kalatori-payment-gateway')
+            );
+            wc_get_logger()->info(
+                sprintf('Reconciliation: order %d set to pending — customer cancelled invoice.', $order_id),
+                ['source' => 'kalatori']
+            );
+            return;
+
+        case KalatoriStatus::AdminCanceled:
+            $order->update_status(
+                WcOrderStatus::Cancelled->value,
+                __('Reconciliation: Kalatori invoice was cancelled by the merchant.', 'kalatori-payment-gateway')
+            );
+            wc_get_logger()->info(
+                sprintf('Reconciliation: order %d cancelled — merchant cancelled invoice.', $order_id),
+                ['source' => 'kalatori']
+            );
+            return;
+    }
+}
+
+/**
  * Handle incoming Kalatori webhook callbacks.
  * Status mapping is defined in {@see KalatoriEventType::toWcStatus()}.
  *
@@ -667,6 +805,7 @@ function kalatori_update_invoice_on_order_edit(int $order_id): void
  */
 function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
 {
+    return new WP_REST_Response(['result' => 'ok'], 200);
     $gateway = new WC_Gateway_Kalatori();
     $secret_key = $gateway->get_option('secret_key');
 

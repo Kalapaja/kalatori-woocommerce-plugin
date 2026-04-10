@@ -69,8 +69,31 @@ The plugin exposes a webhook endpoint that your Kalatori daemon should call when
 POST /wp-json/kalatori/v1/webhook
 ```
 
-Configure this URL in your daemon. All requests must be HMAC-SHA256 signed using the same `secret_key` configured in the
-plugin.
+Configure this URL in your daemon. All requests must be HMAC-SHA256 signed using the same `secret_key` configured in the plugin.
+
+### Order status mapping
+
+| Kalatori event       | WooCommerce order status        |
+|----------------------|---------------------------------|
+| `created`            | no change (already `on-hold`)   |
+| `paid`               | → `processing` (via `payment_complete`) |
+| `partially_paid`     | no change, order note added     |
+| `expired`            | → `cancelled`                   |
+| `admin_canceled`     | → `cancelled`                   |
+| `customer_canceled`  | → `pending` (customer can retry)|
+| `updated`            | no change, no note              |
+
+## Reconciliation
+
+The plugin schedules an hourly background job (via WooCommerce Action Scheduler) that polls the daemon for any `on-hold` orders whose webhooks may have been missed. Orders that received a webhook within the last 90 minutes are skipped.
+
+To trigger reconciliation manually:
+
+```bash
+npx wp-env run cli wp action-scheduler run --hooks=kalatori_reconcile_orders
+```
+
+Or via **WooCommerce → Status → Scheduled Actions**.
 
 ## Releasing
 
