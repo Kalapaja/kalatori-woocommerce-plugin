@@ -805,7 +805,6 @@ function kalatori_reconcile_single_order(WC_Order $order, WC_Gateway_Kalatori $g
  */
 function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
 {
-    return new WP_REST_Response(['result' => 'ok'], 200);
     $gateway = new WC_Gateway_Kalatori();
     $secret_key = $gateway->get_option('secret_key');
 
