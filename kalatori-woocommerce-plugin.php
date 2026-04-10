@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Kalatori Payment Gateway
  * Description: Accept crypto payments via a self-hosted Kalatori daemon.
- * Version: 0.0.5
+ * Version: 0.0.6
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Requires Plugins: woocommerce
@@ -75,12 +75,12 @@ enum KalatoriEventType: string
     public function toWcStatus(): ?WcOrderStatus
     {
         return match ($this) {
-            self::Paid             => WcOrderStatus::Processing,
             self::Expired,
-            self::AdminCanceled,
-            self::CustomerCanceled => WcOrderStatus::Cancelled,
-            self::Created,
-            self::PartiallyPaid    => WcOrderStatus::Pending,
+            self::AdminCanceled    => WcOrderStatus::Cancelled,
+            self::CustomerCanceled => WcOrderStatus::Pending,
+            self::Created          => WcOrderStatus::OnHold,
+            self::Paid          => WcOrderStatus::Processing,
+            self::PartiallyPaid,
             self::Updated          => null,
         };
     }
@@ -152,6 +152,7 @@ function kalatori_init_gateway(): void
     }
 
     add_action('woocommerce_order_status_cancelled', 'kalatori_cancel_invoice_on_wc_cancel');
+    add_action('woocommerce_update_order', 'kalatori_update_invoice_on_order_edit');
 
     add_action('wp_ajax_kalatori_test_connection', static function (): void {
         (new WC_Gateway_Kalatori())->handle_test_connection_ajax();
@@ -350,6 +351,20 @@ function kalatori_init_gateway(): void
                 ['source' => 'kalatori']
             );
 
+            // Reuse existing invoice if still active.
+            $existing_invoice_id  = $order->get_meta('_kalatori_invoice_id');
+            $existing_payment_url = $order->get_meta('_kalatori_payment_url');
+            if ($existing_invoice_id && $existing_payment_url) {
+                $invoice = $this->api_request('GET', '/private/v3/invoice/get', null, ['invoice_id' => $existing_invoice_id]);
+                if (!is_wp_error($invoice) && ($invoice['result']['status'] ?? '') === KalatoriStatus::Waiting->value) {
+                    wc_get_logger()->info(
+                        sprintf('Reusing existing invoice %s for order %d.', $existing_invoice_id, $order_id),
+                        ['source' => 'kalatori']
+                    );
+                    return ['result' => 'success', 'redirect' => $existing_payment_url];
+                }
+            }
+
             // Use an attempt counter so each new invoice gets a unique order_id in the daemon.
             $attempt = (int)$order->get_meta('_kalatori_attempt') + 1;
             $daemon_order_id = $attempt === 1 ? (string)$order_id : $order_id . '-' . $attempt;
@@ -419,10 +434,17 @@ function kalatori_init_gateway(): void
                     sprintf('Invoice creation failed: %s', $response->get_error_message()),
                     ['source' => 'kalatori']
                 );
-                wc_add_notice(
-                    __('Payment error: unable to create invoice. Please try again.', 'kalatori-payment-gateway'),
-                    'error'
-                );
+                if ($response->get_error_code() === 'kalatori_amount_too_low') {
+                    wc_add_notice(
+                        sprintf(__('Payment error: %s', 'kalatori-payment-gateway'), $response->get_error_message()),
+                        'error'
+                    );
+                } else {
+                    wc_add_notice(
+                        __('Payment error: unable to create invoice. Please try again.', 'kalatori-payment-gateway'),
+                        'error'
+                    );
+                }
                 return ['result' => 'failure'];
             }
 
@@ -443,6 +465,8 @@ function kalatori_init_gateway(): void
 
             $order->update_meta_data('_kalatori_invoice_id', $invoice_id);
             $order->update_meta_data('_kalatori_payment_url', $payment_url);
+            $order->update_meta_data('_kalatori_invoice_amount', (string)$order->get_total());
+            $order->set_transaction_id($invoice_id);
             $order->save();
 
             wc_get_logger()->info(
@@ -587,6 +611,52 @@ function kalatori_cancel_invoice_on_wc_cancel(int $order_id): void
     );
 }
 
+/**
+ * Update the Kalatori invoice amount when the admin edits the order total.
+ * Fires on every order save; acts only when the total has changed while the invoice is active.
+ *
+ * @param int $order_id WooCommerce order ID.
+ */
+function kalatori_update_invoice_on_order_edit(int $order_id): void
+{
+    $order = wc_get_order($order_id);
+    if (!$order || $order->get_payment_method() !== 'kalatori' || !$order->has_status(WcOrderStatus::OnHold->value)) {
+        return;
+    }
+
+    $invoice_id      = $order->get_meta('_kalatori_invoice_id');
+    $invoiced_amount = $order->get_meta('_kalatori_invoice_amount');
+    $current_total   = (string)$order->get_total();
+
+    if (empty($invoice_id) || $invoiced_amount === $current_total) {
+        return;
+    }
+
+    $gateway  = new WC_Gateway_Kalatori();
+    $response = $gateway->api_request('POST', '/private/v3/invoice/update', [
+        'invoice_id' => $invoice_id,
+        'amount'     => $current_total,
+    ]);
+
+    if (is_wp_error($response)) {
+        wc_get_logger()->warning(
+            sprintf('Failed to update Kalatori invoice %s for order %d: %s', $invoice_id, $order_id, $response->get_error_message()),
+            ['source' => 'kalatori']
+        );
+        $order->add_order_note(
+            __('Kalatori invoice could not be updated to match the new order total. Consider canceling and having the customer repay.', 'kalatori-payment-gateway')
+        );
+        return;
+    }
+
+    $order->update_meta_data('_kalatori_invoice_amount', $current_total);
+    $order->save();
+
+    wc_get_logger()->info(
+        sprintf('Kalatori invoice %s updated to amount %s for order %d.', $invoice_id, $current_total, $order_id),
+        ['source' => 'kalatori']
+    );
+}
 
 /**
  * Handle incoming Kalatori webhook callbacks.
@@ -663,16 +733,31 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
     }
 
     $wc_status = $kalatoriEvent->toWcStatus();
-    if ($wc_status !== null) {
-        $order->update_status($wc_status->value, $kalatoriEvent->toOrderNote());
+    $note = $kalatoriEvent->toOrderNote();
+    if ($kalatoriEvent === KalatoriEventType::Paid) {
+        $order->payment_complete($invoice_id);
+        if ($note !== '') {
+            $order->add_order_note($note);
+        }
+        wc_get_logger()->info(
+            sprintf('Webhook: order %d — event %s → WC status %s.', $order->get_id(), $event_type, WcOrderStatus::Processing->value . ' (via payment_complete)'),
+            ['source' => 'kalatori']
+        );
+    } elseif ($wc_status !== null) {
+        $order->update_status($wc_status->value, $note);
+        wc_get_logger()->info(
+            sprintf('Webhook: order %d — event %s → WC status %s.', $order->get_id(), $event_type, $wc_status->value),
+            ['source' => 'kalatori']
+        );
+    } elseif ($note !== '') {
+        $order->add_order_note($note);
+        wc_get_logger()->info(
+            sprintf('Webhook: order %d — event %s → no status change, note added.', $order->get_id(), $event_type),
+            ['source' => 'kalatori']
+        );
     }
 
     set_transient($dedup_key, 1, DAY_IN_SECONDS);
-
-    wc_get_logger()->info(
-        sprintf('Webhook: order %d — event %s → WC status %s.', $order->get_id(), $event_type, $wc_status?->value ?? 'no-change'),
-        ['source' => 'kalatori']
-    );
 
     return new WP_REST_Response(['result' => 'ok'], 200);
 }
