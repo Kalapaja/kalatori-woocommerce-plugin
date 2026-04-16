@@ -1,0 +1,31 @@
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE configuration files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Build and package files
+*.zip
+*.tar.gz
+
+# Dependency directories (if you use Composer or NPM later)
+vendor/
+node_modules/
+
+# Kalatori daemon config (contains seed phrase — never commit)
+kalatori-configs/
+
+# Local plugin settings (contains secret key — never commit)
+woocommerce-kalatori-config.json
