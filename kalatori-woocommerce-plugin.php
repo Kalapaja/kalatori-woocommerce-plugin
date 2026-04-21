@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Kalatori Payment Gateway
  * Description: Accept crypto payments via a self-hosted Kalatori daemon.
- * Version: 0.0.8
+ * Version: 0.0.9
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Requires Plugins: woocommerce
@@ -272,18 +272,33 @@ function kalatori_init_gateway(): void
                     'default' => '',
                     'desc_tip' => true,
                 ],
-                'admin_url' => [
-                    'title' => __('Admin URL', 'kalatori-payment-gateway'),
-                    'type' => 'text',
-                    'description' => __('URL of the Kalatori daemon admin interface.', 'kalatori-payment-gateway'),
-                    'default' => '',
-                    'desc_tip' => true,
+                'admin_link' => [
+                    'title' => __('Admin Interface', 'kalatori-payment-gateway'),
+                    'type'  => 'admin_link',
                 ],
                 'test_connection' => [
                     'title' => __('Connection', 'kalatori-payment-gateway'),
                     'type'  => 'test_connection',
                 ],
             ];
+        }
+
+        public function generate_admin_link_html(string $key, array $data): string
+        {
+            $daemon_url = rtrim($this->get_option('daemon_url'), '/');
+            $admin_url  = $daemon_url ? esc_url($daemon_url . '/admin') : '';
+            ob_start(); ?>
+            <tr>
+                <th><?= esc_html($data['title']) ?></th>
+                <td>
+                    <?php if ($admin_url): ?>
+                        <a href="<?= $admin_url ?>" target="_blank" rel="noopener noreferrer"><?= $admin_url ?></a>
+                    <?php else: ?>
+                        <span style="color:#999"><?= esc_html__('Set a Daemon URL above to see the admin link.', 'kalatori-payment-gateway') ?></span>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <?php return ob_get_clean();
         }
 
         public function generate_test_connection_html(string $key, array $data): string

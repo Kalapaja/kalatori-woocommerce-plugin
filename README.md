@@ -22,7 +22,6 @@ self-hosted [Kalatori](https://github.com/Kalapaja/kalatori) daemon.
 |--------------|-------------------------------------------------------------------------------------------------------------|
 | `daemon_url` | Base URL of your self-hosted Kalatori daemon, e.g. `https://pay.yourshop.com`                               |
 | `secret_key` | HMAC-SHA256 secret shared with the daemon — used to sign outgoing API requests and verify incoming webhooks |
-| `admin_url`  | URL of the Kalatori daemon admin interface                                                                   |
 
 ### Option A — WooCommerce admin UI
 
@@ -36,8 +35,7 @@ database option is still empty:
 ```json
 {
   "daemon_url": "https://pay.yourshop.com",
-  "secret_key": "your-hmac-secret",
-  "admin_url":  "https://admin.yourshop.com"
+  "secret_key": "your-hmac-secret"
 }
 ```
 
@@ -49,7 +47,7 @@ database option is still empty:
 
 ```bash
 ./bin/bundle.sh                                          # generic ZIP, no pre-baked config
-./bin/bundle.sh --daemon_url <url> --secret_key <key> --admin_url <url>  # pre-configured ZIP
+./bin/bundle.sh --daemon_url <url> --secret_key <key>  # pre-configured ZIP
 # Output: kalatori-woocommerce-plugin.zip
 ```
 
@@ -57,7 +55,6 @@ database option is still empty:
 |----------------|------------------------------------------|
 | `--daemon_url` | Kalatori daemon base URL                 |
 | `--secret_key` | HMAC-SHA256 signing secret               |
-| `--admin_url`  | Kalatori daemon admin interface URL      |
 
 When at least one flag is provided, the values are baked into the ZIP as `woocommerce-kalatori-config.json` and loaded automatically on first install. Otherwise no config file is included and the merchant configures the gateway via the WooCommerce admin UI.
 
