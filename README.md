@@ -14,7 +14,7 @@ self-hosted [Kalatori](https://github.com/Kalapaja/kalatori) daemon.
 
 1. Build or download the plugin ZIP (see [Building](#building)).
 2. In WordPress admin: **Plugins → Add New → Upload Plugin**, select the ZIP, and activate.
-3. Go to **WooCommerce → Settings → Payments → Crypto (Kalatori)** and enter your daemon URL and secret key. (Optional)
+3. Go to **WooCommerce → Settings → Payments → Kalatori (Crypto)** and enter your daemon URL and secret key. (Optional)
 
 ## Configuration
 
@@ -25,7 +25,7 @@ self-hosted [Kalatori](https://github.com/Kalapaja/kalatori) daemon.
 
 ### Option A — WooCommerce admin UI
 
-Enter the values at **WooCommerce → Settings → Payments → Crypto (Kalatori)**.
+Enter the values at **WooCommerce → Settings → Payments → Kalatori (Crypto)**.
 
 ### Option B — Config file (pre-baked credentials)
 
@@ -67,6 +67,15 @@ POST /wp-json/kalatori/v1/webhook
 ```
 
 Configure this URL in your daemon. All requests must be HMAC-SHA256 signed using the same `secret_key` configured in the plugin.
+
+The plugin validates two headers on every incoming webhook:
+
+| Header                  | Requirement                                                    |
+|-------------------------|----------------------------------------------------------------|
+| `X-KALATORI-SIGNATURE`  | HMAC-SHA256 of `METHOD\nPATH\nBODY\nTIMESTAMP` with `secret_key` |
+| `X-KALATORI-TIMESTAMP`  | Unix timestamp; rejected if more than **5 minutes** from server time |
+
+Requests that pass signature validation are deduplicated by event UUID for **24 hours** — safe to retry on network errors.
 
 ### Order status mapping
 

@@ -18,13 +18,13 @@
     const {createElement, RawHTML} = window.wp.element;
 
     const settings = getSetting('paymentMethodData', {})['kalatori'] || {};
-    const defaultLabel = __('Crypto (Kalatori)', 'kalatori-payment-gateway');
+    const defaultLabel = __('Kalatori (Crypto)', 'kalatori-payment-gateway');
     const label = decodeEntities(settings?.title || '') || defaultLabel;
 
     const icon = settings?.icon
         ? createElement('img', {
             src: settings.icon,
-            alt: __('Crypto (Kalatori)', 'kalatori-payment-gateway'),
+            alt: __('Kalatori (Crypto)', 'kalatori-payment-gateway'),
             width: 24,
             height: 24,
         })

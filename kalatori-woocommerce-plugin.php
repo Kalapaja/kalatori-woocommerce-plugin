@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Kalatori Payment Gateway
  * Description: Accept crypto payments via a self-hosted Kalatori daemon.
- * Version: 0.0.9
+ * Version: 0.0.10
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Requires Plugins: woocommerce
@@ -61,13 +61,13 @@ enum KalatoriEventType: string
     public function toOrderNote(): string
     {
         return match ($this) {
-            self::Created          => __('Awaiting cryptocurrency payment via Kalatori.', 'kalatori-payment-gateway'),
+            self::Created,
+            self::Updated          => '',
             self::Paid             => __('Payment completed via Kalatori.', 'kalatori-payment-gateway'),
             self::PartiallyPaid    => __('Partial payment received via Kalatori; awaiting remaining balance.', 'kalatori-payment-gateway'),
             self::Expired          => __('Kalatori invoice expired without full payment.', 'kalatori-payment-gateway'),
             self::AdminCanceled    => __('Kalatori invoice cancelled by the merchant.', 'kalatori-payment-gateway'),
             self::CustomerCanceled => __('Kalatori invoice cancelled by the customer.', 'kalatori-payment-gateway'),
-            self::Updated          => '',
         };
     }
 
@@ -90,6 +90,12 @@ register_activation_hook(__FILE__, 'kalatori_activate');
 register_deactivation_hook(__FILE__, 'kalatori_deactivate');
 
 function kalatori_activate(): void
+{
+    kalatori_ensure_recurring_actions();
+    flush_rewrite_rules();
+}
+
+function kalatori_ensure_recurring_actions(): void
 {
     if (!as_has_scheduled_action('kalatori_reconcile_orders')) {
         as_schedule_recurring_action(time() + HOUR_IN_SECONDS, HOUR_IN_SECONDS, 'kalatori_reconcile_orders');
@@ -140,7 +146,7 @@ function kalatori_init_gateway(): void
 
         public function is_active(): bool
         {
-            return true;
+            return ($this->settings['enabled'] ?? 'no') === 'yes';
         }
 
         public function get_payment_method_script_handles(): array
@@ -158,7 +164,7 @@ function kalatori_init_gateway(): void
         public function get_payment_method_data(): array
         {
             return [
-                'title' => __('Crypto (Kalatori)', 'kalatori-payment-gateway'),
+                'title' => __('Kalatori (Crypto)', 'kalatori-payment-gateway'),
                 'description' => __('Pay with cryptocurrency via Kalatori', 'kalatori-payment-gateway'),
                 'icon' => plugin_dir_url(__FILE__) . 'assets/images/kalatori-logo.svg',
                 'supports' => $this->get_supported_features(),
@@ -169,7 +175,7 @@ function kalatori_init_gateway(): void
     add_action('woocommerce_order_status_cancelled', 'kalatori_cancel_invoice_on_wc_cancel');
     add_action('woocommerce_update_order', 'kalatori_update_invoice_on_order_edit');
     add_action('kalatori_reconcile_orders', 'kalatori_reconcile_orders_handler');
-    add_action('action_scheduler_ensure_recurring_actions', 'kalatori_activate');
+    add_action('action_scheduler_ensure_recurring_actions', 'kalatori_ensure_recurring_actions');
 
     add_action('wp_ajax_kalatori_test_connection', static function (): void {
         (new WC_Gateway_Kalatori())->handle_test_connection_ajax();
@@ -226,14 +232,14 @@ function kalatori_init_gateway(): void
         {
             $this->id = 'kalatori';
             $this->has_fields = false;
-            $this->method_title = __('Crypto (Kalatori)', 'kalatori-payment-gateway');
+            $this->method_title = __('Kalatori (Crypto)', 'kalatori-payment-gateway');
             $this->method_description = __('Accept crypto payments via Kalatori', 'kalatori-payment-gateway');
             $this->supports = ['products'];
 
             $this->init_form_fields();
             $this->init_settings();
 
-            $this->title = __('Crypto (Kalatori)', 'kalatori-payment-gateway');
+            $this->title = __('Kalatori (Crypto)', 'kalatori-payment-gateway');
             $this->description = __('Pay with cryptocurrency via Kalatori.', 'kalatori-payment-gateway');
             $this->icon = esc_url(plugin_dir_url(__FILE__) . 'assets/images/kalatori-logo.svg');
 
@@ -252,7 +258,7 @@ function kalatori_init_gateway(): void
          */
         public function is_available(): bool
         {
-            return get_woocommerce_currency() === 'USD';
+            return parent::is_available() && get_woocommerce_currency() === 'USD';
         }
 
         public function init_form_fields(): void
@@ -769,6 +775,8 @@ function kalatori_reconcile_single_order(WC_Order $order, WC_Gateway_Kalatori $g
         case KalatoriStatus::OverPaid:
             $order->payment_complete($invoice_id);
             $order->add_order_note(__('Reconciliation: payment confirmed via Kalatori.', 'kalatori-payment-gateway'));
+            $order->update_meta_data('_kalatori_last_reconciliation_ts', time());
+            $order->save();
             wc_get_logger()->info(
                 sprintf('Reconciliation: order %d marked as paid (invoice status: %s).', $order_id, $kalatoriStatus->value),
                 ['source' => 'kalatori']
@@ -781,6 +789,8 @@ function kalatori_reconcile_single_order(WC_Order $order, WC_Gateway_Kalatori $g
                 WcOrderStatus::Cancelled->value,
                 __('Reconciliation: Kalatori invoice expired without full payment.', 'kalatori-payment-gateway')
             );
+            $order->update_meta_data('_kalatori_last_reconciliation_ts', time());
+            $order->save();
             wc_get_logger()->info(
                 sprintf('Reconciliation: order %d cancelled — expired invoice (%s).', $order_id, $kalatoriStatus->value),
                 ['source' => 'kalatori']
@@ -792,6 +802,8 @@ function kalatori_reconcile_single_order(WC_Order $order, WC_Gateway_Kalatori $g
                 WcOrderStatus::Pending->value,
                 __('Reconciliation: Kalatori invoice was cancelled by the customer.', 'kalatori-payment-gateway')
             );
+            $order->update_meta_data('_kalatori_last_reconciliation_ts', time());
+            $order->save();
             wc_get_logger()->info(
                 sprintf('Reconciliation: order %d set to pending — customer cancelled invoice.', $order_id),
                 ['source' => 'kalatori']
@@ -803,6 +815,8 @@ function kalatori_reconcile_single_order(WC_Order $order, WC_Gateway_Kalatori $g
                 WcOrderStatus::Cancelled->value,
                 __('Reconciliation: Kalatori invoice was cancelled by the merchant.', 'kalatori-payment-gateway')
             );
+            $order->update_meta_data('_kalatori_last_reconciliation_ts', time());
+            $order->save();
             wc_get_logger()->info(
                 sprintf('Reconciliation: order %d cancelled — merchant cancelled invoice.', $order_id),
                 ['source' => 'kalatori']
@@ -827,6 +841,11 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
     $timestamp = $request->get_header('X-KALATORI-TIMESTAMP');
     $raw_body = $request->get_body();
 
+    wc_get_logger()->debug(
+        sprintf('Webhook received: sig=%s ts=%s body=%s', $signature, $timestamp, $raw_body),
+        ['source' => 'kalatori']
+    );
+
     if (empty($secret_key) || empty($signature) || empty($timestamp)) {
         wc_get_logger()->warning('Webhook rejected: missing authentication headers.', ['source' => 'kalatori']);
         return new WP_REST_Response(['error' => 'Missing authentication headers.'], 401);
@@ -846,19 +865,21 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
         return new WP_REST_Response(['error' => 'Invalid signature.'], 401);
     }
 
-    $dedup_key = 'kalatori_wh_' . md5($raw_body);
-    if (get_transient($dedup_key)) {
-        wc_get_logger()->info('Webhook: duplicate delivery ignored.', ['source' => 'kalatori']);
-        return new WP_REST_Response(['result' => 'ok'], 200);
-    }
-
-    // Webhook body is GenericEvent<Invoice>: {"id":..., "event_type":..., "payload":{invoice}, ...}
+    // Webhook body is GenericEvent<Invoice>: {"id":..., "event_type":..., "payload":{invoice}, "timestamp":"2024-01-31T12:00:00Z", ...}
     $data = json_decode($raw_body, true);
+    $event_uuid = $data['id'] ?? '';
     $invoice_id = $data['payload']['id'] ?? '';
     $event_type = $data['event_type'] ?? '';
+    $event_ts   = isset($data['timestamp']) ? strtotime($data['timestamp']) : false;
 
-    if (empty($invoice_id) || empty($event_type)) {
-        return new WP_REST_Response(['error' => 'Missing invoice id or event_type.'], 400);
+    if (empty($event_uuid) || empty($invoice_id) || empty($event_type) || $event_ts === false) {
+        return new WP_REST_Response(['error' => 'Missing event id, invoice id, event_type, or timestamp.'], 400);
+    }
+
+    $dedup_key = 'kalatori_wh_' . $event_uuid;
+    if (get_transient($dedup_key)) {
+        wc_get_logger()->info(sprintf('Webhook: duplicate event %s ignored.', $event_uuid), ['source' => 'kalatori']);
+        return new WP_REST_Response(['result' => 'ok'], 200);
     }
 
     $orders = wc_get_orders([
@@ -875,6 +896,15 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
     }
 
     $order = $orders[0];
+    $last_ts = (int)$order->get_meta('_kalatori_last_reconciliation_ts');
+    if ($event_ts <= $last_ts) {
+        wc_get_logger()->info(
+            sprintf('Webhook: order %d — event %s at ts=%d skipped, last processed ts=%d.', $order->get_id(), $event_type, $event_ts, $last_ts),
+            ['source' => 'kalatori']
+        );
+        return new WP_REST_Response(['result' => 'ok'], 200);
+    }
+
     $kalatoriEvent = KalatoriEventType::tryFrom($event_type);
 
     if ($kalatoriEvent === null) {
