@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Kalatori Payment Gateway
  * Description: Accept crypto payments via a self-hosted Kalatori daemon.
- * Version: 0.0.10
+ * Version: 0.0.11
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Requires Plugins: woocommerce
@@ -199,8 +199,6 @@ function kalatori_init_gateway(): void
      * Order meta keys used by this gateway:
      *  - `_kalatori_invoice_id`   UUID of the Kalatori invoice (set on first payment attempt).
      *  - `_kalatori_payment_url`  Public Kalatori payment page URL for the active invoice.
-     *  - `_kalatori_attempt`      Counter incremented on each new invoice attempt; used to
-     *                             produce unique daemon order IDs on retries (e.g. "123-2").
      */
     class WC_Gateway_Kalatori extends WC_Payment_Gateway
     {
@@ -258,12 +256,18 @@ function kalatori_init_gateway(): void
          */
         public function is_available(): bool
         {
-            return parent::is_available() && get_woocommerce_currency() === 'USD';
+            return parent::is_available()
+                && get_woocommerce_currency() === 'USD'
+                && get_option('permalink_structure') !== '';
         }
 
         public function init_form_fields(): void
         {
             $this->form_fields = [
+                'permalink_warning' => [
+                    'title' => __('Configuration', 'kalatori-payment-gateway'),
+                    'type'  => 'permalink_warning',
+                ],
                 'daemon_url' => [
                     'title' => __('Daemon URL', 'kalatori-payment-gateway'),
                     'type' => 'text',
@@ -287,6 +291,29 @@ function kalatori_init_gateway(): void
                     'type'  => 'test_connection',
                 ],
             ];
+        }
+
+        public function generate_permalink_warning_html(string $key, array $data): string
+        {
+            if (get_option('permalink_structure') !== '') {
+                return '';
+            }
+            $url = esc_url(admin_url('options-permalink.php'));
+            ob_start(); ?>
+            <tr>
+                <td colspan="2">
+                    <div class="notice notice-error inline" style="margin:0">
+                        <p><?= wp_kses(
+                            sprintf(
+                                __('Kalatori requires pretty permalinks. Please go to <a href="%s">Settings → Permalinks</a> and choose any option other than "Plain".', 'kalatori-payment-gateway'),
+                                $url
+                            ),
+                            ['a' => ['href' => []]]
+                        ) ?></p>
+                    </div>
+                </td>
+            </tr>
+            <?php return ob_get_clean();
         }
 
         public function generate_admin_link_html(string $key, array $data): string
@@ -403,11 +430,7 @@ function kalatori_init_gateway(): void
                 }
             }
 
-            // Use an attempt counter so each new invoice gets a unique order_id in the daemon.
-            $attempt = (int)$order->get_meta('_kalatori_attempt') + 1;
-            $daemon_order_id = $attempt === 1 ? (string)$order_id : $order_id . '-' . $attempt;
-            $order->update_meta_data('_kalatori_attempt', $attempt);
-            $order->save();
+            $daemon_order_id = $order_id . '-' . bin2hex(random_bytes(4));
 
             $cart_items = [];
             foreach ($order->get_items() as $item) {

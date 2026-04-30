@@ -9,6 +9,7 @@ self-hosted [Kalatori](https://github.com/Kalapaja/kalatori) daemon.
 - PHP ≥ 8.0
 - WooCommerce (declared as a required plugin — WordPress enforces this automatically)
 - USD-denominated WooCommerce store
+- WordPress permalink structure set to anything other than **Plain** (required for the webhook endpoint to resolve)
 
 ## Installation
 
@@ -59,6 +60,8 @@ database option is still empty:
 When at least one flag is provided, the values are baked into the ZIP as `woocommerce-kalatori-config.json` and loaded automatically on first install. Otherwise no config file is included and the merchant configures the gateway via the WooCommerce admin UI.
 
 ## Webhook
+
+> **Plain permalinks are not supported.** WordPress must use a non-plain permalink structure (e.g. "Post name") for the REST API — and therefore the webhook — to work. If plain permalinks are detected, the plugin displays a warning in its settings page and hides itself from the checkout.
 
 The plugin exposes a webhook endpoint that your Kalatori daemon should call when invoice status changes:
 
