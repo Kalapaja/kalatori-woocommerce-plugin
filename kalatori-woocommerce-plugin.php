@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Kalatori Payment Gateway
  * Description: Accept crypto payments via a self-hosted Kalatori daemon.
- * Version: 0.0.11
+ * Version: 0.0.12
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Requires Plugins: woocommerce
@@ -120,6 +120,8 @@ function kalatori_init_gateway(): void
     if (!class_exists('WC_Payment_Gateway')) {
         return;
     }
+
+    add_action('admin_notices', 'kalatori_admin_notices');
 
     add_filter('woocommerce_payment_gateways', static function (array $gateways): array {
         $gateways[] = 'WC_Gateway_Kalatori';
@@ -966,5 +968,44 @@ function kalatori_webhook_handler(WP_REST_Request $request): WP_REST_Response
     set_transient($dedup_key, 1, DAY_IN_SECONDS);
 
     return new WP_REST_Response(['result' => 'ok'], 200);
+}
+
+function kalatori_admin_notices(): void
+{
+
+    if (get_woocommerce_currency() !== 'USD') {
+        $url = admin_url('admin.php?page=wc-settings');
+        echo '<div class="notice notice-error"><p>' . wp_kses(
+            sprintf(
+                __('Kalatori requires <strong>USD</strong> currency. Your store is set to <strong>%s</strong>. Go to <a href="%s">WooCommerce → Settings</a> to change it.', 'kalatori-payment-gateway'),
+                esc_html(get_woocommerce_currency()),
+                esc_url($url)
+            ),
+            ['a' => ['href' => []], 'strong' => []]
+        ) . '</p></div>';
+    }
+
+    if (get_option('permalink_structure') === '') {
+        $url = admin_url('options-permalink.php');
+        echo '<div class="notice notice-error"><p>' . wp_kses(
+            sprintf(
+                __('Kalatori requires pretty permalinks. Go to <a href="%s">Settings → Permalinks</a> and choose any option other than "Plain".', 'kalatori-payment-gateway'),
+                esc_url($url)
+            ),
+            ['a' => ['href' => []]]
+        ) . '</p></div>';
+    }
+
+    $settings = get_option('woocommerce_kalatori_settings', []);
+    if (($settings['enabled'] ?? 'no') !== 'yes') {
+        $url = admin_url('admin.php?page=wc-settings&tab=checkout');
+        echo '<div class="notice notice-warning"><p>' . wp_kses(
+            sprintf(
+                __('Kalatori is installed but the payment gateway is not enabled. Go to <a href="%s">WooCommerce → Payments</a> and enable Kalatori.', 'kalatori-payment-gateway'),
+                esc_url($url)
+            ),
+            ['a' => ['href' => []]]
+        ) . '</p></div>';
+    }
 }
 
