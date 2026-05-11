@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Kalatori Payment Gateway
  * Description: Accept crypto payments via a self-hosted Kalatori daemon.
- * Version: 0.0.12
+ * Version: 0.0.13
  * Requires at least: 6.0
  * Requires PHP: 8.0
  * Requires Plugins: woocommerce
@@ -307,7 +307,7 @@ function kalatori_init_gateway(): void
                     <div class="notice notice-error inline" style="margin:0">
                         <p><?= wp_kses(
                             sprintf(
-                                __('Kalatori requires pretty permalinks. Please go to <a href="%s">Settings → Permalinks</a> and choose any option other than "Plain".', 'kalatori-payment-gateway'),
+                                __('Kalatori requires pretty permalinks. Please go to <a href="%s">Settings → Permalinks</a> and choose any option other than "Plain" (e.g. "Post name").', 'kalatori-payment-gateway'),
                                 $url
                             ),
                             ['a' => ['href' => []]]
@@ -440,10 +440,16 @@ function kalatori_init_gateway(): void
                 $qty = $item->get_quantity();
                 $product = $item->get_product();
 
+                // Daemon expects an integer quantity (u32); collapse fractional WC quantities
+                // (some plugins support these) to a single line with totals.
+                $fractional = $qty != (int)$qty;
+                $line_qty = $fractional ? 1 : (int)$qty;
+                $divisor = $fractional ? 1 : $qty;
+
                 $entry = [
                     'name' => $item->get_name(),
-                    'quantity' => $qty,
-                    'price' => (string)round($item->get_subtotal() / $qty, 2),
+                    'quantity' => $line_qty,
+                    'price' => (string)round($item->get_subtotal() / $divisor, 2),
                 ];
 
                 if ($product) {
@@ -461,15 +467,52 @@ function kalatori_init_gateway(): void
 
                 $tax = $item->get_total_tax();
                 if ($tax > 0) {
-                    $entry['tax'] = (string)round($tax / $qty, 2);
+                    $entry['tax'] = (string)round($tax / $divisor, 2);
                 }
 
                 $discount = $item->get_subtotal() - $item->get_total();
                 if ($discount > 0) {
-                    $entry['discount'] = (string)round($discount / $qty, 2);
+                    $entry['discount'] = (string)round($discount / $divisor, 2);
                 }
 
                 $cart_items[] = $entry;
+            }
+
+            foreach ($order->get_items('shipping') as $shipping) {
+                /** @var WC_Order_Item_Shipping $shipping */
+                $shipping_total = (float)$shipping->get_total();
+                if ($shipping_total <= 0) {
+                    continue;
+                }
+                $shipping_entry = [
+                    'name' => $shipping->get_name(),
+                    'quantity' => 1,
+                    'price' => (string)round($shipping_total, 2),
+                ];
+                $shipping_tax = (float)$shipping->get_total_tax();
+                if ($shipping_tax > 0) {
+                    $shipping_entry['tax'] = (string)round($shipping_tax, 2);
+                }
+                $cart_items[] = $shipping_entry;
+            }
+
+            foreach ($order->get_items('fee') as $fee) {
+                /** @var WC_Order_Item_Fee $fee */
+                // Fees can be negative (some plugins use them as order-level discounts); the daemon's Decimal accepts negative price.
+                $fee_total = (float)$fee->get_total();
+                if ($fee_total == 0) {
+                    continue;
+                }
+                $fee_entry = [
+                    'name' => $fee->get_name(),
+                    'quantity' => 1,
+                    'price' => (string)round($fee_total, 2),
+                ];
+                $fee_tax = (float)$fee->get_total_tax();
+                if ($fee_tax != 0) {
+                    $fee_entry['tax'] = (string)round($fee_tax, 2);
+                }
+                $cart_items[] = $fee_entry;
             }
 
             $redirect_url = $this->get_return_url($order);
@@ -989,7 +1032,7 @@ function kalatori_admin_notices(): void
         $url = admin_url('options-permalink.php');
         echo '<div class="notice notice-error"><p>' . wp_kses(
             sprintf(
-                __('Kalatori requires pretty permalinks. Go to <a href="%s">Settings → Permalinks</a> and choose any option other than "Plain".', 'kalatori-payment-gateway'),
+                __('Kalatori requires pretty permalinks. Go to <a href="%s">Settings → Permalinks</a> and choose any option other than "Plain" (e.g. "Post name").', 'kalatori-payment-gateway'),
                 esc_url($url)
             ),
             ['a' => ['href' => []]]
